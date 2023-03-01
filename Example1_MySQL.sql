@@ -75,7 +75,7 @@ CREATE TABLE event_history(
 
 -- Verifies if the inserted brand is already in the database. If it is, then prevent the insertion.
 DELIMITER //
-CREATE TRIGGER after_brand_insert BEFORE INSERT ON brand
+CREATE TRIGGER before_brand_insert BEFORE INSERT ON brand
 FOR EACH ROW
 BEGIN
     SET @check = (SELECT COUNT(*) FROM brand WHERE brand_name = NEW.brand_name);
@@ -87,7 +87,7 @@ BEGIN
 END//
 
 -- Verifies if the modification in brand is valid
-CREATE TRIGGER after_brand_update BEFORE UPDATE ON brand
+CREATE TRIGGER before_brand_update BEFORE UPDATE ON brand
 FOR EACH ROW
 BEGIN
     SET @check = (SELECT COUNT(*) FROM brand WHERE brand_name = NEW.brand_name);
@@ -100,7 +100,7 @@ END//
 
 -- Verifies if the product already exists, if the inventory is inicialized as nonnegative
 -- and if the brand of the product is already initialized
-CREATE TRIGGER after_product_insert BEFORE INSERT ON product
+CREATE TRIGGER before_product_insert BEFORE INSERT ON product
 FOR EACH ROW
 BEGIN
     SET @emptycheck = (SELECT EXISTS (SELECT 1 FROM brand));-- Check if brand table is empty
@@ -128,7 +128,7 @@ END//
 
 -- Verifies if the modification on product is valid, i.e, if the inventory is nonnegative and 
 -- if the brand exists in the respective table
-CREATE TRIGGER after_product_update BEFORE UPDATE ON product
+CREATE TRIGGER before_product_update BEFORE UPDATE ON product
 FOR EACH ROW
 BEGIN
     SET @brandcheck = (SELECT COUNT(*) FROM brand WHERE id = NEW.brand_id);
@@ -142,7 +142,7 @@ BEGIN
 END//
 
 -- Verifies if the worker entry already exists (document number is unique for each person)
-CREATE TRIGGER after_worker_insert BEFORE INSERT ON worker
+CREATE TRIGGER before_worker_insert BEFORE INSERT ON worker
 FOR EACH ROW
 BEGIN
     SET @idcheck = (SELECT COUNT(*) FROM worker WHERE document_number = NEW.document_number);
@@ -158,7 +158,7 @@ END//
 
 -- Prevents the modification of the worker's document number.
 -- Also verifies that a email change doesn't overlaps with other worker's email (email is unique)
-CREATE TRIGGER after_worker_update BEFORE UPDATE ON worker
+CREATE TRIGGER before_worker_update BEFORE UPDATE ON worker
 FOR EACH ROW
 BEGIN
     IF NEW.email IS NOT NULL THEN
@@ -181,9 +181,13 @@ END//
 
 -- Verifies if the sale quantity is not greater than the available inventory and if sale
 -- is made by authorized personal (a seller or a manager)
-CREATE TRIGGER after_sale_insert BEFORE INSERT ON sale
+CREATE TRIGGER before_sale_insert BEFORE INSERT ON sale
 FOR EACH ROW
 BEGIN
+    SET @emptycheck = (SELECT EXISTS (SELECT 1 FROM worker));
+    IF @emptycheck = 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'worker table is empty. Please, update it before doing any sales.';
+    END IF;
     SET @job = (SELECT job FROM worker WHERE id = NEW.seller_id);
     IF @job = 'seller' OR @job = 'manager' THEN
         SET @sellercheck = 1;
@@ -196,6 +200,7 @@ BEGIN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'The worker is not authorized to do this task.';
     ELSE
         INSERT INTO event_history(eve, event_datetime) VALUES ("Sale succesfull.",CURRENT_TIMESTAMP);
+        UPDATE product SET inventory = inventory - NEW.quantity WHERE id = NEW.product_id;
     END IF;
 END//
 
@@ -243,21 +248,21 @@ INSERT INTO worker (document_number, worker_name, email, job) VALUES
 ('13765012-9', 'Hernesto Martinez', 'hermar@gmail.cl', 'seller'),
 ('10285222-2', 'Jhon Wright', 'jw@outlook.com', 'manager');
 
--- Insert some data (60 times) on table sale with a while loop so we save some writting
-SET @start_time = (SELECT DATE_ADD(CURRENT_TIMESTAMP, INTERVAL 1 MINUTE));
+-- Create a procedure to insert random data into the sale table
 DELIMITER //
+CREATE PROCEDURE sale_insert_random_routine(IN ninsert INT)
 BEGIN
-    WHILE CURRENT_TIMESTAMP < @start_time DO
+    SET @start = 0;
+    WHILE @start < ninsert DO
         INSERT INTO sale (product_id, seller_id, quantity, sale_datetime) VALUES
-        ((SELECT FLOOR(RAND()*4)+1), 1, (SELECT FLOOR(RAND()*10)+1), CURRENT_TIMESTAMP); -- Insert random, integer values
-        DO SLEEP(1); -- Wait for 1 second
+        ((SELECT FLOOR(RAND()*4)+1), (SELECT FLOOR(RAND()*5)+1), (SELECT FLOOR(RAND()*10)+1), CURRENT_TIMESTAMP); -- Insert random, integer values
+        SET @start = @start + 1;
     END WHILE;
 END//
 
 DELIMITER ;
+CALL sale_insert_random_routine(1);
 
 -- Create a view with the most important info on products and sales
-GO
 CREATE VIEW sale_per_product AS 
 SELECT p.product_name, p.brand_id, p.price, s.quantity, s.sale_datetime FROM sale s RIGHT JOIN product p ON s.product_id = p.id;
-GO
